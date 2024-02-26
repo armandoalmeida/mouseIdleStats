@@ -1,10 +1,10 @@
 import java.awt.*;
 import java.time.Duration;
-import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.time.temporal.ChronoUnit;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class MouseMover {
 
@@ -17,79 +17,86 @@ public class MouseMover {
         }
     }
 
-    @SuppressWarnings("java:S2189")
     private static class MouseManager {
 
-        private static final int CHECK_INTERVAL_IN_MILLIS = (1000 * 60) * 4;
+        private static final Duration CHECKING_INTERVAL = Duration.ofMinutes(4);
+        private static final int MOUSE_MOVE_DELAY = 100; // in milliseconds
 
-        private long idleTotalTime = 0;
         private Coordinate lastCoordinate = null;
+        private Duration idleTotalTime = Duration.ZERO;
 
+        private final Robot robot;
         private final boolean keepOsAlive;
 
-        public MouseManager(boolean keepOsAlive) {
+        private final ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
+
+        public MouseManager(boolean keepOsAlive) throws AWTException {
+            this.robot = new Robot();
             this.keepOsAlive = keepOsAlive;
         }
 
         public void start() throws InterruptedException, AWTException {
-            log("started (checking for %d min of idle time)", resolveCheckIntervalInMinutes());
+            log("Started (checking for %d min of idle time)", CHECKING_INTERVAL.toMinutes());
+            if (keepOsAlive)
+                log("Keep OS alive during mouse idle checking");
 
-            LocalDateTime lastMovement = null;
-            while (true) {
-                int x = (int) MouseInfo.getPointerInfo().getLocation().getX();
-                int y = (int) MouseInfo.getPointerInfo().getLocation().getY();
-                Coordinate currentCoordinate = new Coordinate(x, y);
-
-                // System.out.println(lastCoordinate + " -> " + currentCoordinate);
-                if (currentCoordinate.equals(lastCoordinate)) {
-                    if (lastMovement == null) {
-                        log("starting counting idle time...");
-                        lastMovement = currentCoordinate.date;
+            final LocalDateTime[] lastMovement = {null};
+            executorService.scheduleAtFixedRate(() -> {
+                try {
+                    Coordinate currentCoordinate = resolveCurrentCoordinate();
+                    if (currentCoordinate.equals(lastCoordinate)) {
+                        startTimeCounter(lastMovement, currentCoordinate);
+                    } else {
+                        waitForNextCheck(lastMovement, currentCoordinate);
                     }
-
-                    if (keepOsAlive)
-                        moveMousePointer(currentCoordinate);
-
-                    Thread.sleep(500);
-                } else {
-                    if (lastMovement != null) {
-                        log("end: %s", resolveTimeDifference(lastMovement, currentCoordinate.date));
-                        log("total mouse idle time: %s", formatSeconds(idleTotalTime));
-                        lastMovement = null;
-                    }
-                    Thread.sleep(CHECK_INTERVAL_IN_MILLIS);
+                    lastCoordinate = currentCoordinate.clone();
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                    executorService.shutdown();
                 }
-                lastCoordinate = currentCoordinate.clone();
+            }, 0, CHECKING_INTERVAL.toMillis(), TimeUnit.MILLISECONDS);
+        }
+
+        private void startTimeCounter(LocalDateTime[] lastMovement, Coordinate currentCoordinate) throws InterruptedException {
+            if (lastMovement[0] == null) {
+                log("Starting counting idle time...");
+                lastMovement[0] = currentCoordinate.date;
             }
+
+            if (keepOsAlive)
+                moveMousePointer(currentCoordinate);
+
+            Thread.sleep(Duration.ofSeconds(1).toMillis());
         }
 
-        private static Integer resolveCheckIntervalInMinutes() {
-            LocalDateTime checkInterval = LocalDateTime.ofInstant(Instant.ofEpochMilli(CHECK_INTERVAL_IN_MILLIS), ZoneId.systemDefault());
-            return Integer.valueOf(DateTimeFormatter.ofPattern("m").format(checkInterval));
+        private void waitForNextCheck(LocalDateTime[] lastMovement, Coordinate currentCoordinate) throws InterruptedException {
+            if (lastMovement[0] != null) {
+                log("End: %s", resolveTimeDifference(lastMovement[0], currentCoordinate.date));
+                log("Total mouse idle time: %s", format(idleTotalTime));
+                lastMovement[0] = null;
+            }
+            Thread.sleep(CHECKING_INTERVAL.toMillis());
         }
 
-        /**
-         * Keeps the OS alive
-         *
-         * @param currentCoordinate keep the pointer in the same coordinate
-         * @throws AWTException         due to mouse movement with {@link Robot}
-         * @throws InterruptedException due to {@link Thread#sleep(long)}
-         */
-        private void moveMousePointer(Coordinate currentCoordinate) throws AWTException, InterruptedException {
-            Robot robot = new Robot();
+        private static Coordinate resolveCurrentCoordinate() {
+            int x = (int) MouseInfo.getPointerInfo().getLocation().getX();
+            int y = (int) MouseInfo.getPointerInfo().getLocation().getY();
+            return new Coordinate(x, y);
+        }
+
+        private void moveMousePointer(Coordinate currentCoordinate) throws InterruptedException {
             robot.mouseMove(currentCoordinate.x + 1, currentCoordinate.y);
-            Thread.sleep(10);
+            Thread.sleep(MOUSE_MOVE_DELAY);
             robot.mouseMove(currentCoordinate.x, currentCoordinate.y);
         }
 
         private String resolveTimeDifference(LocalDateTime dateTime1, LocalDateTime dateTime2) {
-            long diffInSeconds = ChronoUnit.SECONDS.between(dateTime1, dateTime2) + (CHECK_INTERVAL_IN_MILLIS / 1000);
-            idleTotalTime += diffInSeconds;
-            return formatSeconds(diffInSeconds);
+            Duration diff = Duration.between(dateTime1, dateTime2).plus(CHECKING_INTERVAL);
+            idleTotalTime = idleTotalTime.plus(diff);
+            return format(diff);
         }
 
-        public String formatSeconds(long seconds) {
-            Duration duration = Duration.ofSeconds(seconds);
+        public String format(Duration duration) {
             return String.format("%02d:%02d:%02d", duration.toHours(), duration.toMinutesPart(), duration.toSecondsPart());
         }
 
