@@ -16,7 +16,7 @@ public class MouseMover {
 
     private static class MouseManager {
 
-        private static final Duration CHECKING_INTERVAL = Duration.ofSeconds(1);
+        private static final Duration CHECKING_INTERVAL = Duration.ofMinutes(4);
         private static final int MOUSE_MOVE_DELAY = 100; // in milliseconds
 
         private Coordinate lastCoordinate;
