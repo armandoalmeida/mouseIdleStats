@@ -2,9 +2,6 @@ import java.awt.*;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 public class MouseMover {
 
@@ -19,16 +16,17 @@ public class MouseMover {
 
     private static class MouseManager {
 
-        private static final Duration CHECKING_INTERVAL = Duration.ofMinutes(4);
+        private static final Duration CHECKING_INTERVAL = Duration.ofSeconds(1);
         private static final int MOUSE_MOVE_DELAY = 100; // in milliseconds
 
-        private Coordinate lastCoordinate = null;
+        private Coordinate lastCoordinate;
+        private LocalDateTime lastMovement;
         private Duration idleTotalTime = Duration.ZERO;
 
         private final Robot robot;
         private final boolean keepOsAlive;
 
-        private final ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
+        private volatile boolean running = false;
 
         public MouseManager(boolean keepOsAlive) throws AWTException {
             this.robot = new Robot();
@@ -40,27 +38,26 @@ public class MouseMover {
             if (keepOsAlive)
                 log("Keep OS alive during mouse idle checking");
 
-            final LocalDateTime[] lastMovement = {null};
-            executorService.scheduleAtFixedRate(() -> {
-                try {
-                    Coordinate currentCoordinate = resolveCurrentCoordinate();
-                    if (currentCoordinate.equals(lastCoordinate)) {
-                        startTimeCounter(lastMovement, currentCoordinate);
-                    } else {
-                        waitForNextCheck(lastMovement, currentCoordinate);
-                    }
-                    lastCoordinate = currentCoordinate.clone();
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                    executorService.shutdown();
+            running = true;
+            while (running) {
+                Coordinate currentCoordinate = resolveCurrentCoordinate();
+                if (currentCoordinate.equals(lastCoordinate)) {
+                    startTimeCounter(currentCoordinate);
+                } else {
+                    waitForNextCheck(currentCoordinate);
                 }
-            }, 0, CHECKING_INTERVAL.toMillis(), TimeUnit.MILLISECONDS);
+                lastCoordinate = currentCoordinate.clone();
+            }
         }
 
-        private void startTimeCounter(LocalDateTime[] lastMovement, Coordinate currentCoordinate) throws InterruptedException {
-            if (lastMovement[0] == null) {
+        public void stop() {
+            running = false;
+        }
+
+        private void startTimeCounter(Coordinate currentCoordinate) throws InterruptedException {
+            if (lastMovement == null) {
                 log("Starting counting idle time...");
-                lastMovement[0] = currentCoordinate.date;
+                lastMovement = currentCoordinate.date;
             }
 
             if (keepOsAlive)
@@ -69,11 +66,11 @@ public class MouseMover {
             Thread.sleep(Duration.ofSeconds(1).toMillis());
         }
 
-        private void waitForNextCheck(LocalDateTime[] lastMovement, Coordinate currentCoordinate) throws InterruptedException {
-            if (lastMovement[0] != null) {
-                log("End: %s", resolveTimeDifference(lastMovement[0], currentCoordinate.date));
+        private void waitForNextCheck(Coordinate currentCoordinate) throws InterruptedException {
+            if (lastMovement != null) {
+                log("End: %s", resolveTimeDifference(lastMovement, currentCoordinate.date));
                 log("Total mouse idle time: %s", format(idleTotalTime));
-                lastMovement[0] = null;
+                lastMovement = null;
             }
             Thread.sleep(CHECKING_INTERVAL.toMillis());
         }
