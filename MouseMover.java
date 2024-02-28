@@ -2,6 +2,7 @@ import java.awt.*;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Random;
 
 public class MouseMover {
 
@@ -16,21 +17,21 @@ public class MouseMover {
 
     private static class MouseManager {
 
-        private static final Duration CHECKING_INTERVAL = Duration.ofMinutes(4);
-        private static final int MOUSE_MOVE_DELAY = 100; // in milliseconds
+        private static final Duration CHECKING_INTERVAL = Duration.ofMinutes(2);
+        private static final Duration COUNTER_DELAY = Duration.ofSeconds(1);
 
         private Coordinate lastCoordinate;
         private LocalDateTime lastMovement;
         private Duration idleTotalTime = Duration.ZERO;
 
-        private final Robot robot;
         private final boolean keepOsAlive;
+        private final PointerMover pointerMover;
 
-        private volatile boolean running = false;
+        private volatile boolean running = false; // TODO improve this
 
         public MouseManager(boolean keepOsAlive) throws AWTException {
-            this.robot = new Robot();
             this.keepOsAlive = keepOsAlive;
+            this.pointerMover = new PointerMover();
         }
 
         public void start() throws InterruptedException, AWTException {
@@ -40,7 +41,7 @@ public class MouseMover {
 
             running = true;
             while (running) {
-                Coordinate currentCoordinate = resolveCurrentCoordinate();
+                Coordinate currentCoordinate = Coordinate.current();
                 if (currentCoordinate.equals(lastCoordinate)) {
                     startTimeCounter(currentCoordinate);
                 } else {
@@ -59,11 +60,11 @@ public class MouseMover {
                 log("Starting counting idle time...");
                 lastMovement = currentCoordinate.date;
             }
+            if (keepOsAlive) {
+                pointerMover.move(currentCoordinate);
+            }
 
-            if (keepOsAlive)
-                moveMousePointer(currentCoordinate);
-
-            Thread.sleep(Duration.ofSeconds(1).toMillis());
+            Thread.sleep(COUNTER_DELAY.toMillis());
         }
 
         private void waitForNextCheck(Coordinate currentCoordinate) throws InterruptedException {
@@ -73,18 +74,6 @@ public class MouseMover {
                 lastMovement = null;
             }
             Thread.sleep(CHECKING_INTERVAL.toMillis());
-        }
-
-        private static Coordinate resolveCurrentCoordinate() {
-            int x = (int) MouseInfo.getPointerInfo().getLocation().getX();
-            int y = (int) MouseInfo.getPointerInfo().getLocation().getY();
-            return new Coordinate(x, y);
-        }
-
-        private void moveMousePointer(Coordinate currentCoordinate) throws InterruptedException {
-            robot.mouseMove(currentCoordinate.x + 1, currentCoordinate.y);
-            Thread.sleep(MOUSE_MOVE_DELAY);
-            robot.mouseMove(currentCoordinate.x, currentCoordinate.y);
         }
 
         private String resolveTimeDifference(LocalDateTime dateTime1, LocalDateTime dateTime2) {
@@ -105,6 +94,38 @@ public class MouseMover {
         }
     }
 
+    private enum Direction {
+        UP, DOWN, LEFT, RIGHT
+    }
+
+    private static class PointerMover {
+
+        private static final int POINTER_MOVE_DELAY = 100; // in milliseconds
+
+        private final Robot robot;
+
+        public PointerMover() throws AWTException {
+            this.robot = new Robot();
+        }
+
+        public void move(Coordinate currentCoordinate) throws InterruptedException {
+            Direction randomDirection = Direction.values()[new Random().nextInt(4)];
+            int randomPixels = new Random().nextInt(90) + 10;
+            int x = currentCoordinate.x;
+            int y = currentCoordinate.y;
+
+            switch (randomDirection) {
+                case UP -> robot.mouseMove(x, y - randomPixels);
+                case DOWN -> robot.mouseMove(x, y + randomPixels);
+                case LEFT -> robot.mouseMove(x - randomPixels, y);
+                case RIGHT -> robot.mouseMove(x + randomPixels, y);
+            }
+
+            Thread.sleep(POINTER_MOVE_DELAY);
+            robot.mouseMove(currentCoordinate.x, currentCoordinate.y);
+        }
+    }
+
     private static class Coordinate {
         int x;
         int y;
@@ -119,6 +140,12 @@ public class MouseMover {
         @Override
         public Coordinate clone() {
             return new Coordinate(this.x, this.y);
+        }
+
+        public static Coordinate current() {
+            int x = (int) MouseInfo.getPointerInfo().getLocation().getX();
+            int y = (int) MouseInfo.getPointerInfo().getLocation().getY();
+            return new Coordinate(x, y);
         }
 
         @Override
