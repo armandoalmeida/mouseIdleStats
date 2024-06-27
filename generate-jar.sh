@@ -1,5 +1,8 @@
-#!/bin/bash -e
+#!/bin/bash -ex
 
-javac MouseMover.java
-echo "Main-Class: MouseMover" > Manifest.txt
-jar cvfm mouseMover.jar Manifest.txt MouseMover*.class
+javac MouseIdleStats.java
+# echo "Main-Class: MouseIdleStats" > Manifest.txt
+jar cvfm mouseIdleStats.jar Manifest.txt MouseIdleStats*.class
+mkdir -p dist
+mv MouseIdleStats*.class dist
+mv mouseIdleStats.jar dist

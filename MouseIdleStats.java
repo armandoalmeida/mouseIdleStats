@@ -3,35 +3,59 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Random;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
-public class MouseMover {
+public class MouseIdleStats {
 
     public static void main(String[] args) {
         try {
             boolean keepOsAlive = args.length > 0 && args[0].equals("--keep-os-alive");
-            new MouseManager(keepOsAlive).start();
-        } catch (AWTException | InterruptedException e) {
+            final MouseManager mouseManager = new MouseManager(keepOsAlive);
+            ExecutorService service = Executors.newCachedThreadPool();
+            service.submit(mouseManager);
+
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                try {
+                    mouseManager.stop();
+                    service.awaitTermination(500, TimeUnit.MILLISECONDS);
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }));
+        } catch (AWTException e) {
             e.printStackTrace();
         }
     }
 
-    private static class MouseManager {
+    private static class MouseManager implements Runnable {
 
         private static final Duration CHECKING_INTERVAL = Duration.ofMinutes(2);
         private static final Duration COUNTER_DELAY = Duration.ofSeconds(1);
 
-        private Coordinate lastCoordinate;
+        private Point lastCoordinate;
+        private LocalDateTime currentDateTime;
         private LocalDateTime lastMovement;
         private Duration idleTotalTime = Duration.ZERO;
 
         private final boolean keepOsAlive;
         private final PointerMover pointerMover;
 
-        private volatile boolean running = false; // TODO improve this
+        private volatile boolean running = true;
 
         public MouseManager(boolean keepOsAlive) throws AWTException {
             this.keepOsAlive = keepOsAlive;
             this.pointerMover = new PointerMover();
+        }
+
+        @Override
+        public void run() {
+            try {
+                start();
+            } catch (InterruptedException | AWTException e) {
+                throw new RuntimeException(e);
+            }
         }
 
         public void start() throws InterruptedException, AWTException {
@@ -39,41 +63,47 @@ public class MouseMover {
             if (keepOsAlive)
                 log("Keep OS alive during mouse idle checking");
 
-            running = true;
             while (running) {
-                Coordinate currentCoordinate = Coordinate.current();
-                if (currentCoordinate.equals(lastCoordinate)) {
-                    startTimeCounter(currentCoordinate);
+                Point currentPoint = MouseInfo.getPointerInfo().getLocation();
+                currentDateTime = LocalDateTime.now();
+                if (currentPoint.equals(lastCoordinate)) {
+                    startTimeCounter(currentPoint);
                 } else {
-                    waitForNextCheck(currentCoordinate);
+                    waitForNextCheck();
                 }
-                lastCoordinate = currentCoordinate.clone();
+                lastCoordinate = new Point(currentPoint);
             }
         }
 
         public void stop() {
             running = false;
+            checkLastMovement();
+            log("Done");
         }
 
-        private void startTimeCounter(Coordinate currentCoordinate) throws InterruptedException {
+        private void startTimeCounter(Point currentPoint) throws InterruptedException {
             if (lastMovement == null) {
                 log("Starting counting idle time...");
-                lastMovement = currentCoordinate.date;
+                lastMovement = currentDateTime;
             }
             if (keepOsAlive) {
-                pointerMover.move(currentCoordinate);
+                pointerMover.move(currentPoint);
             }
 
             Thread.sleep(COUNTER_DELAY.toMillis());
         }
 
-        private void waitForNextCheck(Coordinate currentCoordinate) throws InterruptedException {
+        private void waitForNextCheck() throws InterruptedException {
+            checkLastMovement();
+            Thread.sleep(CHECKING_INTERVAL.toMillis());
+        }
+
+        private void checkLastMovement() {
             if (lastMovement != null) {
-                log("End: %s", resolveTimeDifference(lastMovement, currentCoordinate.date));
+                log("End: %s", resolveTimeDifference(lastMovement, currentDateTime));
                 log("Total mouse idle time: %s", format(idleTotalTime));
                 lastMovement = null;
             }
-            Thread.sleep(CHECKING_INTERVAL.toMillis());
         }
 
         private String resolveTimeDifference(LocalDateTime dateTime1, LocalDateTime dateTime2) {
@@ -87,7 +117,7 @@ public class MouseMover {
         }
 
         private void log(String message, Object... properties) {
-            LocalDateTime dateTime = lastCoordinate != null ? lastCoordinate.date : LocalDateTime.now();
+            LocalDateTime dateTime = lastMovement != null ? lastMovement : LocalDateTime.now();
             String date = dateTime.format(DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss"));
             String formatted = String.format(message, properties);
             System.out.println(date + " " + formatted);
@@ -108,11 +138,11 @@ public class MouseMover {
             this.robot = new Robot();
         }
 
-        public void move(Coordinate currentCoordinate) throws InterruptedException {
+        public void move(Point currentPoint) throws InterruptedException {
             Direction randomDirection = Direction.values()[new Random().nextInt(4)];
             int randomPixels = new Random().nextInt(90) + 10;
-            int x = currentCoordinate.x;
-            int y = currentCoordinate.y;
+            int x = currentPoint.x;
+            int y = currentPoint.y;
 
             switch (randomDirection) {
                 case UP -> robot.mouseMove(x, y - randomPixels);
@@ -122,53 +152,7 @@ public class MouseMover {
             }
 
             Thread.sleep(POINTER_MOVE_DELAY);
-            robot.mouseMove(currentCoordinate.x, currentCoordinate.y);
-        }
-    }
-
-    private static class Coordinate {
-        int x;
-        int y;
-        LocalDateTime date;
-
-        public Coordinate(int x, int y) {
-            this.x = x;
-            this.y = y;
-            this.date = LocalDateTime.now();
-        }
-
-        @Override
-        public Coordinate clone() {
-            return new Coordinate(this.x, this.y);
-        }
-
-        public static Coordinate current() {
-            int x = (int) MouseInfo.getPointerInfo().getLocation().getX();
-            int y = (int) MouseInfo.getPointerInfo().getLocation().getY();
-            return new Coordinate(x, y);
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
-
-            Coordinate that = (Coordinate) o;
-
-            if (x != that.x) return false;
-            return y == that.y;
-        }
-
-        @Override
-        public int hashCode() {
-            int result = x;
-            result = 31 * result + y;
-            return result;
-        }
-
-        @Override
-        public String toString() {
-            return "{" + "x=" + x + ", y=" + y + '}';
+            robot.mouseMove(currentPoint.x, currentPoint.y);
         }
     }
 }
