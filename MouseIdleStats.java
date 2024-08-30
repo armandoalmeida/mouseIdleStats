@@ -41,15 +41,15 @@ public class MouseIdleStats {
         private static final Duration CHECKING_INTERVAL = Duration.ofMinutes(2);
         private static final Duration COUNTER_DELAY = Duration.ofSeconds(1);
 
-        private Duration idleTotalTime = Duration.ZERO;
         private Point lastCoordinate;
+        private boolean counterScheduledActive;
         private LocalDateTime lastCheckDateTime;
         private LocalDateTime lastMovementDateTime;
-        private boolean counterScheduledActive;
-        private final ScheduledFuture<?> counterScheduledFuture;
-        private final ScheduledFuture<?> checkerScheduledFuture;
+        private Duration idleTotalTime = Duration.ZERO;
 
         private final boolean keepOsAlive;
+        private final ScheduledFuture<?> counterScheduledFuture;
+        private final ScheduledFuture<?> checkerScheduledFuture;
 
         public MouseManager(boolean keepOsAlive) {
             this.keepOsAlive = keepOsAlive;
@@ -157,8 +157,7 @@ public class MouseIdleStats {
         }
 
         public static void stop() {
-            if (stoppedPoint != null)
-                stoppedPoint = null;
+            stoppedPoint = null;
         }
 
         public static void shutdown() {
