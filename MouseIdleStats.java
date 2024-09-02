@@ -54,14 +54,23 @@ public class MouseIdleStats {
         public MouseManager(boolean keepOsAlive) {
             this.keepOsAlive = keepOsAlive;
             this.checkerScheduledFuture = Scheduler.scheduleAtFixedRate(this::continuousCheck, CHECKING_INTERVAL);
-            this.counterScheduledFuture = Scheduler.scheduleAtFixedRate(this::pointerStoppedCheck, COUNTER_DELAY);
+            this.counterScheduledFuture = Scheduler.scheduleAtFixedRate(this::idlePointerCheck, COUNTER_DELAY);
 
             logger.info("Started (checking for %s min of idle time)".formatted(CHECKING_INTERVAL.toMinutes()));
             if (keepOsAlive)
                 logger.info("Keep OS alive during mouse idle checking");
         }
 
-        public void continuousCheck() {
+        public void stop() {
+            checkLastMovement();
+            PointerMover.shutdown();
+            counterScheduledFuture.cancel(false);
+            checkerScheduledFuture.cancel(false);
+            logger.info("Done");
+        }
+
+
+        private void continuousCheck() {
             try {
                 if (!counterScheduledActive)
                     checkMousePosition(true);
@@ -71,7 +80,7 @@ public class MouseIdleStats {
             }
         }
 
-        private void pointerStoppedCheck() {
+        private void idlePointerCheck() {
             checkMousePosition(false);
         }
 
@@ -89,13 +98,6 @@ public class MouseIdleStats {
             }
         }
 
-        private void stopIdleTimeCounter() {
-            if (keepOsAlive)
-                PointerMover.stop();
-
-            counterScheduledActive = false;
-        }
-
         private void startIdleTimeCounter(Point currentPoint) {
             if (!counterScheduledActive) {
                 if (lastMovementDateTime == null) {
@@ -110,12 +112,11 @@ public class MouseIdleStats {
             }
         }
 
-        public void stop() {
-            checkLastMovement();
-            PointerMover.shutdown();
-            logger.info("Done");
-            counterScheduledFuture.cancel(false);
-            checkerScheduledFuture.cancel(false);
+        private void stopIdleTimeCounter() {
+            if (keepOsAlive)
+                PointerMover.stop();
+
+            counterScheduledActive = false;
         }
 
         private void checkLastMovement() {
@@ -139,7 +140,7 @@ public class MouseIdleStats {
         private static final Duration POINTER_MOVE_DELAY = Duration.ofMillis(100);
 
         private static final Random random = new Random();
-        private static final ScheduledFuture<?> scheduledMouseMove = Scheduler.scheduleAtFixedRate(PointerMover::move, POINTER_MOVE_SCHEDULER_DURATION);
+        private static final ScheduledFuture<?> scheduledPointerMove = Scheduler.scheduleAtFixedRate(PointerMover::move, POINTER_MOVE_SCHEDULER_DURATION);
 
         private static Point stoppedPoint;
         private static final Robot robot;
@@ -161,7 +162,7 @@ public class MouseIdleStats {
         }
 
         public static void shutdown() {
-            scheduledMouseMove.cancel(true);
+            scheduledPointerMove.cancel(true);
         }
 
         private static void move() {
@@ -198,7 +199,7 @@ public class MouseIdleStats {
                 for (StackTraceElement element : Thread.currentThread().getStackTrace()) {
                     String className = element.getClassName();
                     String methodName = element.getMethodName();
-                    if (className.contains(logRecord.getLoggerName()) && !"info".equals(methodName) && !className.equals(LoggerFormatter.class.getName())) {
+                    if (className.contains(logRecord.getLoggerName()) && !className.equals(LoggerFormatter.class.getName())) {
                         callerClassName = className;
                         callerMethodName = methodName;
                         break;
