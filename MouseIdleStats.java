@@ -1,78 +1,135 @@
 import java.awt.*;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.util.Random;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.ConsoleHandler;
 import java.util.logging.Formatter;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogManager;
 import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 public class MouseIdleStats {
-    private static final Logger logger = Logger.getLogger(MouseIdleStats.class.getName());
-
-    static {
-        ConsoleHandler consoleHandler = new ConsoleHandler();
-        consoleHandler.setFormatter(new LoggerFormatter());
-        logger.setUseParentHandlers(false);
-        logger.addHandler(consoleHandler);
-    }
+    private static final CustomLogger log = CustomLogger.getLogger(Level.INFO, MouseIdleStats.class.getName());
 
     public static void main(String[] args) {
         boolean keepOsAlive = args.length > 0 && args[0].equals("--keep-os-alive");
-        final MouseManager mouseManager = new MouseManager(keepOsAlive);
-        Runtime.getRuntime().addShutdownHook(new Thread(mouseManager::stop));
+        new MouseManager(keepOsAlive).run();
     }
 
-    private static class Scheduler {
-        public static ScheduledFuture<?> scheduleAtFixedRate(Runnable command, Duration duration) {
-            return Executors.newSingleThreadScheduledExecutor().scheduleAtFixedRate(command, 0, duration.toMillis(), TimeUnit.MILLISECONDS);
+    public static class Scheduler implements Runnable {
+
+        private final Runnable command;
+        private final Duration duration;
+        private final SchedulerType schedulerType;
+        private ScheduledFuture<?> scheduledFuture;
+        private final ScheduledExecutorService scheduledExecutorService;
+
+        protected Scheduler(SchedulerType schedulerType, Runnable command, Duration duration) {
+            this.command = command;
+            this.duration = duration;
+            this.schedulerType = schedulerType;
+            this.scheduledExecutorService = Executors.newSingleThreadScheduledExecutor();
         }
 
-        public static void schedule(Runnable command, Duration duration) {
-            Executors.newSingleThreadScheduledExecutor().schedule(command, duration.toMillis(), TimeUnit.MILLISECONDS);
+        public static Scheduler newPeriodic(Runnable command, Duration duration) {
+            return new Scheduler(SchedulerType.PERIODIC, command, duration);
         }
+
+        public static void oneShot(Runnable command, Duration duration) {
+            new Scheduler(SchedulerType.ONE_SHOT, command, duration).run();
+        }
+
+        @Override
+        public void run() {
+            if (SchedulerType.ONE_SHOT.equals(schedulerType)) {
+                this.schedule(() -> {
+                    command.run();
+                    this.shutdown();
+                }, duration);
+            }
+
+            if (SchedulerType.PERIODIC.equals(schedulerType))
+                this.scheduleAtFixedRate(command, duration);
+        }
+
+        public void shutdown() {
+            if (this.scheduledFuture != null)
+                this.scheduledFuture.cancel(false);
+            this.scheduledExecutorService.shutdown();
+        }
+
+        private void scheduleAtFixedRate(Runnable command, Duration duration) {
+            this.scheduledFuture = this.scheduledExecutorService.scheduleAtFixedRate(command, 0, duration.toMillis(), TimeUnit.MILLISECONDS);
+        }
+
+        private void schedule(Runnable command, Duration duration) {
+            this.scheduledFuture = this.scheduledExecutorService.schedule(command, duration.toMillis(), TimeUnit.MILLISECONDS);
+        }
+
+        private enum SchedulerType {
+            PERIODIC, ONE_SHOT
+        }
+
     }
 
-    private static class MouseManager {
+    private static class MouseManager implements Runnable {
 
         private static final Duration CHECKING_INTERVAL = Duration.ofMinutes(2);
         private static final Duration COUNTER_DELAY = Duration.ofSeconds(1);
 
-        private Point lastCoordinate;
-        private boolean counterScheduledActive;
+        private Point lastPoint;
+        private boolean counterCheckActive;
         private LocalDateTime lastCheckDateTime;
         private LocalDateTime lastMovementDateTime;
         private Duration idleTotalTime = Duration.ZERO;
 
         private final boolean keepOsAlive;
-        private final ScheduledFuture<?> counterScheduledFuture;
-        private final ScheduledFuture<?> checkerScheduledFuture;
+        private final Scheduler counterScheduler;
+        private final Scheduler checkerScheduler;
 
         public MouseManager(boolean keepOsAlive) {
             this.keepOsAlive = keepOsAlive;
-            this.checkerScheduledFuture = Scheduler.scheduleAtFixedRate(this::continuousCheck, CHECKING_INTERVAL);
-            this.counterScheduledFuture = Scheduler.scheduleAtFixedRate(this::idlePointerCheck, COUNTER_DELAY);
+            this.checkerScheduler = Scheduler.newPeriodic(this::continuousCheck, CHECKING_INTERVAL);
+            this.counterScheduler = Scheduler.newPeriodic(this::counterCheck, COUNTER_DELAY);
 
-            logger.info("Started (checking for %s min of idle time)".formatted(CHECKING_INTERVAL.toMinutes()));
+            log.info("Started (checking for %s min of idle time)".formatted(CHECKING_INTERVAL.toMinutes()));
             if (keepOsAlive)
-                logger.info("Keep OS alive during mouse idle checking");
+                log.info("Keep OS alive during mouse idle checking");
+        }
+
+        @Override
+        public void run() {
+            this.checkerScheduler.run();
+            this.counterScheduler.run();
+
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                try {
+                    this.stop();
+                } finally {
+                    log.shutdown();
+                }
+            }));
         }
 
         public void stop() {
+            counterScheduler.shutdown();
+            checkerScheduler.shutdown();
             checkLastMovement();
-            PointerMover.shutdown();
-            counterScheduledFuture.cancel(false);
-            checkerScheduledFuture.cancel(false);
-            logger.info("Done");
+            log.info("Done");
         }
-
 
         private void continuousCheck() {
             try {
-                if (!counterScheduledActive)
+                if (!counterCheckActive)
                     checkMousePosition(true);
             } catch (RuntimeException e) {
                 e.printStackTrace();
@@ -80,113 +137,137 @@ public class MouseIdleStats {
             }
         }
 
-        private void idlePointerCheck() {
+        private void counterCheck() {
             checkMousePosition(false);
         }
 
         private void checkMousePosition(boolean continuousCheck) {
-            if (continuousCheck || counterScheduledActive) {
+            if (continuousCheck || counterCheckActive) {
                 Point currentPoint = MouseInfo.getPointerInfo().getLocation();
                 lastCheckDateTime = LocalDateTime.now();
-                if (currentPoint.equals(lastCoordinate)) {
+                log.fine("%s - %s".formatted(lastPoint, currentPoint));
+                if (currentPoint.equals(lastPoint)) {
                     startIdleTimeCounter(currentPoint);
                 } else {
                     stopIdleTimeCounter();
                     checkLastMovement();
                 }
-                lastCoordinate = new Point(currentPoint);
+                lastPoint = new Point(currentPoint);
             }
         }
 
         private void startIdleTimeCounter(Point currentPoint) {
-            if (!counterScheduledActive) {
+            if (!counterCheckActive) {
                 if (lastMovementDateTime == null) {
-                    logger.info("Starting counting idle time...");
-                    lastMovementDateTime = lastCheckDateTime;
+                    log.info("Starting counting idle time...");
+                    lastMovementDateTime = LocalDateTime.from(lastCheckDateTime);
                 }
 
-                this.counterScheduledActive = true;
-
+                this.counterCheckActive = true;
+            } else {
                 if (keepOsAlive)
-                    PointerMover.start(currentPoint);
+                    PointerMover.move(currentPoint);
             }
         }
 
         private void stopIdleTimeCounter() {
-            if (keepOsAlive)
-                PointerMover.stop();
-
-            counterScheduledActive = false;
+            counterCheckActive = false;
         }
 
         private void checkLastMovement() {
             if (lastMovementDateTime != null) {
                 Duration timeDiff = Duration.between(lastMovementDateTime, lastCheckDateTime).plus(CHECKING_INTERVAL);
                 idleTotalTime = idleTotalTime.plus(timeDiff);
-                logger.info("End: %s".formatted(formatDuration(timeDiff)));
-                logger.info("Total mouse idle time: %s".formatted(formatDuration(idleTotalTime)));
+                log.info("End: %s".formatted(formatDuration(timeDiff)));
+                log.info("Total mouse idle time: %s".formatted(formatDuration(idleTotalTime)));
                 lastMovementDateTime = null;
             }
         }
 
-        public String formatDuration(Duration duration) {
+        private String formatDuration(Duration duration) {
             return String.format("%02d:%02d:%02d", duration.toHours(), duration.toMinutesPart(), duration.toSecondsPart());
         }
 
     }
 
     private static class PointerMover {
-        private static final Duration POINTER_MOVE_SCHEDULER_DURATION = MouseManager.COUNTER_DELAY.dividedBy(2);
-        private static final Duration POINTER_MOVE_DELAY = Duration.ofMillis(100);
-
-        private static final Random random = new Random();
-        private static final ScheduledFuture<?> scheduledPointerMove = Scheduler.scheduleAtFixedRate(PointerMover::move, POINTER_MOVE_SCHEDULER_DURATION);
-
-        private static Point stoppedPoint;
         private static final Robot robot;
 
         static {
             try {
                 robot = new Robot();
             } catch (AWTException e) {
-                throw new RuntimeException(e);
+                throw new IllegalStateException(e);
             }
         }
 
-        public static void start(Point currentPoint) {
-            stoppedPoint = currentPoint;
+        public PointerMover() {
+            throw new UnsupportedOperationException("Static pointer mover");
         }
 
-        public static void stop() {
-            stoppedPoint = null;
-        }
-
-        public static void shutdown() {
-            scheduledPointerMove.cancel(true);
-        }
-
-        private static void move() {
-            if (stoppedPoint != null) {
-                Direction randomDirection = Direction.values()[random.nextInt(4)];
-                int randomPixels = random.nextInt(90) + 10;
-                int x = stoppedPoint.x;
-                int y = stoppedPoint.y;
-
-                switch (randomDirection) {
-                    case UP -> robot.mouseMove(x, y - randomPixels);
-                    case DOWN -> robot.mouseMove(x, y + randomPixels);
-                    case LEFT -> robot.mouseMove(x - randomPixels, y);
-                    case RIGHT -> robot.mouseMove(x + randomPixels, y);
-                }
-
-                Scheduler.schedule(() -> robot.mouseMove(stoppedPoint.x, stoppedPoint.y), POINTER_MOVE_DELAY);
+        private static synchronized void move(Point stoppedPoint) {
+            Direction randomDirection = Direction.values()[ThreadLocalRandom.current().nextInt(4)];
+            int randomPixels = ThreadLocalRandom.current().nextInt(90) + 10;
+            switch (randomDirection) {
+                case UP -> robot.mouseMove(stoppedPoint.x, stoppedPoint.y - randomPixels);
+                case DOWN -> robot.mouseMove(stoppedPoint.x, stoppedPoint.y + randomPixels);
+                case LEFT -> robot.mouseMove(stoppedPoint.x - randomPixels, stoppedPoint.y);
+                case RIGHT -> robot.mouseMove(stoppedPoint.x + randomPixels, stoppedPoint.y);
             }
+            restorePosition(stoppedPoint);
+        }
+
+        private static void restorePosition(Point stoppedPoint) {
+            Scheduler.oneShot(() -> robot.mouseMove(stoppedPoint.x, stoppedPoint.y), Duration.ofMillis(100));
         }
 
         private enum Direction {
             UP, DOWN, LEFT, RIGHT
         }
 
+    }
+
+    /**
+     * This class created because default {@link Logger} can be not available during the shutdown process. It won't
+     * remove the logger handlers until the method shutdown be called.
+     */
+    public static class CustomLogger extends Logger {
+
+        private static final List<CustomLogger> instances = new ArrayList<>();
+        private boolean canRemoveHandler = false;
+
+        protected CustomLogger(Level level, String name) {
+            super(name, null);
+
+            ConsoleHandler consoleHandler = new ConsoleHandler();
+            consoleHandler.setFormatter(new LoggerFormatter());
+            consoleHandler.setLevel(level);
+            this.setUseParentHandlers(false);
+            this.addHandler(consoleHandler);
+            this.setLevel(level);
+
+            LogManager.getLogManager().addLogger(this);
+        }
+
+        public static CustomLogger getLogger(Level level, String name) {
+            CustomLogger customLogger = new CustomLogger(level, name);
+            instances.add(customLogger);
+            return customLogger;
+        }
+
+        public void shutdown() {
+            instances.forEach(customLogger -> {
+                customLogger.canRemoveHandler = true;
+                Arrays.stream(customLogger.getHandlers()).forEach(Handler::flush);
+            });
+            LogManager.getLogManager().reset();
+        }
+
+        @Override
+        public void removeHandler(Handler handler) throws SecurityException {
+            if (canRemoveHandler)
+                super.removeHandler(handler);
+        }
     }
 
     private static class LoggerFormatter extends Formatter {
