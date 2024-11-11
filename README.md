@@ -16,7 +16,7 @@ Pre-requisites:
 
 At terminal run the script (if needed give execution permission to the file):
 ```shell
-./generate-jar.sh
+./package.sh
 ```
 
 This script will generate `mouseIdleStats.jar` file into `dist` folder.
@@ -26,7 +26,7 @@ This script will generate `mouseIdleStats.jar` file into `dist` folder.
 Run the jar.
 
 ```shell
-java -jar dist/mouseIdleStats.jar
+java -jar dist/MouseIdleStats-1.0.0.jar
 ```
 
 #### Keep OS alive option
@@ -34,7 +34,7 @@ java -jar dist/mouseIdleStats.jar
 There is an option to keep OS alive during checking mouse idle. This can be usefully to prevent the computer to sleep.
 
 ```shell
-java -jar dist/mouseIdleStats.jar --keep-os-alive`
+java -jar dist/MouseIdleStats-1.0.0.jar --keep-os-alive`
 ```
 
 ### Future improvements
