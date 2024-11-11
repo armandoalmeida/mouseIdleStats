@@ -39,14 +39,6 @@ public class MouseManager implements Runnable {
     public void run() {
         this.checkerScheduler.run();
         this.counterScheduler.run();
-
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            try {
-                this.stop();
-            } finally {
-                log.shutdown();
-            }
-        }));
     }
 
     public void stop() {
