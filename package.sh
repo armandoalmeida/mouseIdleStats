@@ -17,13 +17,15 @@ mkdir -p "$DEST_DIR"
 printf "done\n"
 
 CURRENT_JAVA=$(java --version)
-printf "\nCurrent java version: %s\n" "$CURRENT_JAVA"
+printf "\nCurrent java version:\n%s\n" "$CURRENT_JAVA"
 
-printf "\nCompiling java files in '%s'... " $ROOT_PACKAGE
+printf "\nCompiling java files:\n"
 find "$ROOT_PACKAGE" -name "*.java" | while read -r file; do
+  printf "%s..." $file
   javac "$file"
+  printf "done\n"
 done
-printf "done\n"
+printf "\n"
 
 printf "Creating jar package... "
 # Find and move .class files while preserving the directory structure
